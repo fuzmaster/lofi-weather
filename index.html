@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lofi Weather</title>
+<style>
+  :root {
+    --bg-1: #1a1a8c;
+    --bg-2: #0a0a4a;
+    --fg: #ffd84d;
+    --fg-dim: #e8e8e8;
+    --accent: #ff6b35;
+    --panel: rgba(0, 0, 60, 0.55);
+    --border: #ffd84d;
+    --font: 'Star4000', 'VT323', 'Courier New', monospace;
+  }
+
+  @font-face {
+    font-family: 'VT323';
+    src: url('https://fonts.gstatic.com/s/vt323/v17/pxiKyp0ihIEF2isfFJU.woff2') format('woff2');
+    font-display: swap;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    font-family: var(--font);
+    background: #000;
+    color: var(--fg);
+    user-select: none;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+
+  #tv {
+    width: min(960px, 100%);
+    aspect-ratio: 4 / 3;
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    border: 4px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 0 60px rgba(255, 216, 77, 0.25), inset 0 0 80px rgba(0, 0, 0, 0.6);
+    position: relative;
+    overflow: hidden;
+    image-rendering: pixelated;
+  }
+
+  /* CRT scanline overlay */
+  #tv::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.18) 3px,
+      rgba(0, 0, 0, 0.18) 4px
+    );
+    pointer-events: none;
+    z-index: 10;
+    mix-blend-mode: multiply;
+  }
+
+  /* CRT vignette */
+  #tv::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.6) 100%);
+    pointer-events: none;
+    z-index: 11;
+  }
+
+  header {
+    padding: 16px 24px 8px;
+    border-bottom: 2px solid var(--fg);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  header h1 {
+    font-size: clamp(20px, 3.2vw, 32px);
+    letter-spacing: 2px;
+    text-shadow: 2px 2px 0 #000;
+  }
+  header .loc {
+    font-size: clamp(14px, 2vw, 20px);
+    color: var(--fg-dim);
+    text-shadow: 2px 2px 0 #000;
+  }
+
+  main {
+    padding: 20px 28px;
+    height: calc(100% - 130px);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .channel { display: none; height: 100%; }
+  .channel.active { display: block; animation: fadeIn 0.4s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  /* Current Conditions */
+  .current { display: flex; gap: 32px; align-items: center; height: 100%; }
+  .current .icon { font-size: clamp(80px, 16vw, 160px); text-shadow: 4px 4px 0 #000; }
+  .current .data { flex: 1; }
+  .current .temp { font-size: clamp(60px, 11vw, 120px); line-height: 1; text-shadow: 4px 4px 0 #000; }
+  .current .cond { font-size: clamp(20px, 3.2vw, 32px); margin-top: 8px; color: var(--fg-dim); }
+  .current .extras {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 28px;
+    font-size: clamp(14px, 2vw, 20px);
+    color: var(--fg-dim);
+  }
+  .current .extras strong { color: var(--fg); }
+
+  /* Hourly + Daily */
+  .grid { display: grid; gap: 8px; height: 100%; }
+  .grid.hourly { grid-template-columns: repeat(6, 1fr); align-content: center; }
+  .grid.daily { grid-template-columns: repeat(7, 1fr); align-content: center; }
+  .cell {
+    text-align: center;
+    padding: 12px 4px;
+    border: 1px solid rgba(255, 216, 77, 0.3);
+    border-radius: 6px;
+    font-size: clamp(12px, 1.6vw, 16px);
+  }
+  .cell .when { color: var(--fg-dim); }
+  .cell .ico { font-size: clamp(28px, 4vw, 40px); margin: 6px 0; }
+  .cell .t { font-size: clamp(18px, 2.6vw, 24px); }
+  .cell .lo { color: var(--fg-dim); font-size: clamp(12px, 1.6vw, 16px); }
+
+  /* Almanac */
+  .almanac { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; height: 100%; align-content: center; font-size: clamp(14px, 2vw, 20px); }
+  .almanac .box { padding: 16px; border: 1px solid var(--fg); border-radius: 6px; }
+  .almanac h3 { color: var(--fg); margin-bottom: 10px; font-size: clamp(16px, 2.2vw, 24px); }
+  .almanac p { color: var(--fg-dim); line-height: 1.5; }
+
+  /* Visualizer */
+  #viz {
+    position: absolute;
+    bottom: 36px; left: 0; right: 0;
+    height: 32px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 2px;
+    padding: 0 12px;
+    pointer-events: none;
+    z-index: 6;
+  }
+  #viz .bar {
+    flex: 1;
+    max-width: 14px;
+    background: linear-gradient(to top, var(--fg), var(--accent));
+    border-radius: 1px 1px 0 0;
+    height: 2px;
+    transition: height 80ms ease-out;
+    opacity: 0.85;
+    box-shadow: 0 0 6px rgba(255, 216, 77, 0.4);
+  }
+
+  /* Crawl */
+  footer {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 36px;
+    background: var(--accent);
+    color: #fff;
+    border-top: 2px solid #000;
+    overflow: hidden;
+    font-size: 18px;
+    display: flex; align-items: center;
+    text-shadow: 1px 1px 0 #000;
+  }
+  .crawl-track { white-space: nowrap; animation: crawl 60s linear infinite; padding-left: 100%; }
+  @keyframes crawl { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+
+  /* Settings */
+  #settings-btn {
+    position: fixed;
+    top: 20px; right: 20px;
+    background: var(--fg);
+    color: #000;
+    border: none;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    font-size: 22px;
+    cursor: pointer;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  }
+  #settings-btn:hover { transform: rotate(45deg); transition: transform 0.2s; }
+
+  #panel {
+    position: fixed;
+    top: 0; right: -360px;
+    width: 340px;
+    height: 100%;
+    background: #111;
+    color: #fff;
+    border-left: 2px solid var(--fg);
+    padding: 24px;
+    overflow-y: auto;
+    transition: right 0.3s ease;
+    z-index: 101;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  #panel.open { right: 0; }
+  #panel h2 { color: var(--fg); margin-bottom: 16px; font-family: var(--font); letter-spacing: 1px; }
+  #panel label { display: block; margin-top: 14px; font-size: 13px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; }
+  #panel input[type="text"], #panel select {
+    width: 100%; margin-top: 4px; padding: 8px;
+    background: #222; color: #fff; border: 1px solid #444; border-radius: 4px;
+    font-size: 14px;
+  }
+  #panel .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  #panel .check input { width: auto; }
+  #panel .themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+  #panel .swatch {
+    aspect-ratio: 1;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    position: relative;
+  }
+  #panel .swatch.active { border-color: #fff; }
+  #panel button.primary {
+    width: 100%; margin-top: 20px; padding: 10px;
+    background: var(--fg); color: #000; border: none; border-radius: 4px;
+    font-weight: bold; cursor: pointer; font-size: 14px;
+  }
+  #panel .close { position: absolute; top: 12px; right: 12px; background: none; border: none; color: #fff; font-size: 24px; cursor: pointer; }
+
+  #status { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; color: var(--fg); text-shadow: 2px 2px 0 #000; z-index: 5; }
+
+  /* Music player */
+  #player {
+    position: fixed;
+    bottom: 20px; left: 20px;
+    background: #111;
+    color: #fff;
+    border: 2px solid var(--fg);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex; align-items: center; gap: 12px;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    z-index: 99;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    min-width: 240px;
+  }
+  #player button.pp {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--fg); color: #000;
+    border: none; cursor: pointer;
+    font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  #player .meta { flex: 1; min-width: 0; }
+  #player .meta .station { color: var(--fg); font-weight: bold; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  #player .meta .now { color: #aaa; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #player input[type="range"] { width: 70px; }
+  #player .pick {
+    background: transparent; color: var(--fg); border: 1px solid var(--fg);
+    border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer;
+  }
+  #yt-frame { position: absolute; left: -9999px; width: 1px; height: 1px; }
+</style>
+</head>
+<body>
+
+<div id="tv">
+  <header>
+    <h1 id="brand">LOFI WEATHER</h1>
+    <div class="loc" id="loc">—</div>
+  </header>
+
+  <main>
+    <div id="status">Loading…</div>
+
+    <section class="channel" data-name="current">
+      <div class="current">
+        <div class="icon" id="c-icon">☀️</div>
+        <div class="data">
+          <div class="temp"><span id="c-temp">--</span><span id="c-unit">°F</span></div>
+          <div class="cond" id="c-cond">—</div>
+          <div class="extras">
+            <div>Feels Like: <strong id="c-feels">--</strong></div>
+            <div>Humidity: <strong id="c-hum">--</strong></div>
+            <div>Wind: <strong id="c-wind">--</strong></div>
+            <div>Pressure: <strong id="c-pres">--</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="channel" data-name="hourly">
+      <div class="grid hourly" id="hourly-grid"></div>
+    </section>
+
+    <section class="channel" data-name="daily">
+      <div class="grid daily" id="daily-grid"></div>
+    </section>
+
+    <section class="channel" data-name="almanac">
+      <div class="almanac">
+        <div class="box">
+          <h3>SUN</h3>
+          <p>Sunrise: <span id="a-sunrise">--</span></p>
+          <p>Sunset: <span id="a-sunset">--</span></p>
+          <p>Daylight: <span id="a-daylight">--</span></p>
+        </div>
+        <div class="box">
+          <h3>TODAY</h3>
+          <p>High: <span id="a-high">--</span></p>
+          <p>Low: <span id="a-low">--</span></p>
+          <p>Precip: <span id="a-precip">--</span></p>
+        </div>
+        <div class="box">
+          <h3>UV INDEX</h3>
+          <p id="a-uv">--</p>
+        </div>
+        <div class="box">
+          <h3>AIR</h3>
+          <p>Visibility: <span id="a-vis">--</span></p>
+          <p>Cloud Cover: <span id="a-cloud">--</span></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="viz"></div>
+
+  <footer>
+    <div class="crawl-track" id="crawl">Welcome to Lofi Weather — your retro forecast — stay cozy.</div>
+  </footer>
+</div>
+
+<div id="player">
+  <button class="pp" id="pp">▶</button>
+  <div class="meta">
+    <div class="station" id="p-station">— OFF —</div>
+    <div class="now" id="p-now">Pick a station</div>
+  </div>
+  <input type="range" id="vol" min="0" max="100" value="60" title="Volume" />
+  <button class="pick" id="pick">▾</button>
+</div>
+<audio id="audio" crossorigin="anonymous"></audio>
+<div id="yt-frame"></div>
+
+<button id="settings-btn" title="Settings">⚙</button>
+
+<aside id="panel">
+  <button class="close" id="close-panel">×</button>
+  <h2>SETTINGS</h2>
+
+  <label>Location (city, ZIP, or "lat,lon")</label>
+  <input type="text" id="in-location" placeholder="Detroit, MI" />
+
+  <label>Brand Name</label>
+  <input type="text" id="in-brand" maxlength="32" />
+
+  <label>Units</label>
+  <select id="in-units">
+    <option value="imperial">Fahrenheit / mph</option>
+    <option value="metric">Celsius / km/h</option>
+  </select>
+
+  <label>Cycle Speed (seconds per channel)</label>
+  <input type="text" id="in-cycle" />
+
+  <label>Channels to Show</label>
+  <div id="channel-toggles"></div>
+
+  <label>Theme</label>
+  <div class="themes" id="themes"></div>
+
+  <label>Crawl Message</label>
+  <input type="text" id="in-crawl" maxlength="200" />
+
+  <label>Custom YouTube Playlist (URL or ID)</label>
+  <input type="text" id="in-yt" placeholder="e.g. PLxxxxx or full YouTube URL" />
+
+  <button class="primary" id="save">SAVE & RELOAD</button>
+</aside>
+
+<script>
+const THEMES = {
+  classic:  { '--bg-1':'#1a1a8c', '--bg-2':'#0a0a4a', '--fg':'#ffd84d', '--accent':'#ff6b35' },
+  vapor:    { '--bg-1':'#ff77e9', '--bg-2':'#6a3aff', '--fg':'#00fff7', '--accent':'#ff2079' },
+  forest:   { '--bg-1':'#1a4d2e', '--bg-2':'#0a1f0f', '--fg':'#c8e6c9', '--accent':'#ff9800' },
+  sunset:   { '--bg-1':'#ff6b35', '--bg-2':'#7a1f0a', '--fg':'#ffe680', '--accent':'#ff2079' },
+  mono:     { '--bg-1':'#222', '--bg-2':'#000', '--fg':'#0f0', '--accent':'#0f0' },
+  ocean:    { '--bg-1':'#006994', '--bg-2':'#001f3f', '--fg':'#e0f7fa', '--accent':'#ffca28' },
+};
+
+const DEFAULTS = {
+  location: 'Detroit, MI',
+  brand: 'LOFI WEATHER',
+  units: 'imperial',
+  cycle: 8,
+  channels: { current: true, hourly: true, daily: true, almanac: true },
+  theme: 'classic',
+  crawl: 'Welcome to Lofi Weather — your retro forecast — stay cozy.',
+  customYt: '',
+  station: '',
+  volume: 60,
+};
+
+// Music stations. type 'audio' = direct stream URL. type 'yt' = YouTube video/playlist embed.
+const STATIONS = [
+  { id: 'gs',    type: 'audio', name: 'SomaFM Groove Salad',   sub: 'Downtempo / Ambient',  url: 'https://ice1.somafm.com/groovesalad-128-mp3' },
+  { id: 'dz',    type: 'audio', name: 'SomaFM Drone Zone',     sub: 'Ambient Soundscapes',  url: 'https://ice1.somafm.com/dronezone-128-mp3' },
+  { id: 'lush',  type: 'audio', name: 'SomaFM Lush',           sub: 'Sensuous Vocals',      url: 'https://ice1.somafm.com/lush-128-mp3' },
+  { id: 'fluid', type: 'audio', name: 'SomaFM Fluid',          sub: 'Liquid Trip-Hop',      url: 'https://ice1.somafm.com/fluid-128-mp3' },
+  { id: 'def',   type: 'audio', name: 'SomaFM Deep Space One', sub: 'Deep Ambient Electronic', url: 'https://ice1.somafm.com/deepspaceone-128-mp3' },
+  { id: 'lofi',  type: 'yt',    name: 'Lofi Girl (YouTube)',   sub: 'Lofi Hip Hop Radio',   videoId: 'jfKfPfyJRdk' },
+  { id: 'wxch',  type: 'yt',    name: 'WX Channel Smooth Jazz', sub: 'YouTube — Trammell Starks vibes', videoId: '__W_PaHKjBM' },
+  { id: 'custom', type: 'yt',   name: 'Custom YouTube',        sub: 'Set in Settings →',    videoId: '' },
+];
+
+const cfg = loadConfig();
+applyConfig();
+
+let weatherData = null;
+let coords = null;
+let activeChannelIdx = 0;
+let cycleTimer = null;
+
+// ---------- Config ----------
+function loadConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('lofi-weather-cfg') || '{}');
+    return { ...DEFAULTS, ...saved, channels: { ...DEFAULTS.channels, ...(saved.channels || {}) } };
+  } catch { return { ...DEFAULTS }; }
+}
+
+function saveConfig() {
+  localStorage.setItem('lofi-weather-cfg', JSON.stringify(cfg));
+}
+
+function applyConfig() {
+  const t = THEMES[cfg.theme] || THEMES.classic;
+  for (const [k, v] of Object.entries(t)) document.documentElement.style.setProperty(k, v);
+  document.getElementById('brand').textContent = cfg.brand;
+  document.getElementById('crawl').textContent = cfg.crawl;
+}
+
+// ---------- Geocoding ----------
+async function geocode(query) {
+  const m = query.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]), name: `${m[1]}, ${m[2]}` };
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data.results || !data.results.length) throw new Error('Location not found');
+  const r = data.results[0];
+  return { lat: r.latitude, lon: r.longitude, name: `${r.name}${r.admin1 ? ', ' + r.admin1 : ''}` };
+}
+
+// ---------- Weather fetch ----------
+async function fetchWeather(lat, lon) {
+  const tempUnit = cfg.units === 'imperial' ? 'fahrenheit' : 'celsius';
+  const windUnit = cfg.units === 'imperial' ? 'mph' : 'kmh';
+  const precipUnit = cfg.units === 'imperial' ? 'inch' : 'mm';
+  const params = new URLSearchParams({
+    latitude: lat, longitude: lon,
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,pressure_msl,cloud_cover,visibility,uv_index',
+    hourly: 'temperature_2m,weather_code',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_sum,uv_index_max',
+    temperature_unit: tempUnit,
+    wind_speed_unit: windUnit,
+    precipitation_unit: precipUnit,
+    timezone: 'auto',
+    forecast_days: 7,
+  });
+  const url = `https://api.open-meteo.com/v1/forecast?${params}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Weather fetch failed');
+  return res.json();
+}
+
+// ---------- WMO weather code -> {icon, label} ----------
+function wmo(code, isDay = true) {
+  const map = {
+    0:  ['☀️', 'Clear'],
+    1:  ['🌤️', 'Mainly Clear'],
+    2:  ['⛅', 'Partly Cloudy'],
+    3:  ['☁️', 'Overcast'],
+    45: ['🌫️', 'Foggy'],
+    48: ['🌫️', 'Rime Fog'],
+    51: ['🌦️', 'Light Drizzle'],
+    53: ['🌦️', 'Drizzle'],
+    55: ['🌧️', 'Heavy Drizzle'],
+    56: ['🌧️', 'Freezing Drizzle'],
+    57: ['🌧️', 'Freezing Drizzle'],
+    61: ['🌧️', 'Light Rain'],
+    63: ['🌧️', 'Rain'],
+    65: ['🌧️', 'Heavy Rain'],
+    66: ['🌧️', 'Freezing Rain'],
+    67: ['🌧️', 'Freezing Rain'],
+    71: ['🌨️', 'Light Snow'],
+    73: ['🌨️', 'Snow'],
+    75: ['❄️', 'Heavy Snow'],
+    77: ['❄️', 'Snow Grains'],
+    80: ['🌦️', 'Rain Showers'],
+    81: ['🌧️', 'Rain Showers'],
+    82: ['⛈️', 'Heavy Showers'],
+    85: ['🌨️', 'Snow Showers'],
+    86: ['❄️', 'Snow Showers'],
+    95: ['⛈️', 'Thunderstorm'],
+    96: ['⛈️', 'Thunderstorm'],
+    99: ['⛈️', 'Thunderstorm'],
+  };
+  let [icon, label] = map[code] || ['❓', 'Unknown'];
+  if (!isDay && code === 0) icon = '🌙';
+  if (!isDay && code === 1) icon = '🌙';
+  return { icon, label };
+}
+
+// ---------- Render ----------
+function renderAll(d) {
+  const tempU = cfg.units === 'imperial' ? '°F' : '°C';
+  const windU = cfg.units === 'imperial' ? 'mph' : 'km/h';
+  const precipU = cfg.units === 'imperial' ? 'in' : 'mm';
+  const cur = d.current;
+  const today = d.daily;
+
+  // Current
+  const w = wmo(cur.weather_code, true);
+  document.getElementById('c-icon').textContent = w.icon;
+  document.getElementById('c-temp').textContent = Math.round(cur.temperature_2m);
+  document.getElementById('c-unit').textContent = tempU;
+  document.getElementById('c-cond').textContent = w.label.toUpperCase();
+  document.getElementById('c-feels').textContent = `${Math.round(cur.apparent_temperature)}${tempU}`;
+  document.getElementById('c-hum').textContent = `${cur.relative_humidity_2m}%`;
+  document.getElementById('c-wind').textContent = `${Math.round(cur.wind_speed_10m)} ${windU} ${degToCompass(cur.wind_direction_10m)}`;
+  document.getElementById('c-pres').textContent = `${Math.round(cur.pressure_msl)} hPa`;
+
+  // Hourly (next 6, every 2 hours)
+  const hg = document.getElementById('hourly-grid');
+  hg.innerHTML = '';
+  const nowIdx = d.hourly.time.findIndex(t => new Date(t) >= new Date());
+  const start = Math.max(0, nowIdx);
+  for (let i = 0; i < 6; i++) {
+    const idx = start + i * 2;
+    if (idx >= d.hourly.time.length) break;
+    const t = new Date(d.hourly.time[idx]);
+    const ww = wmo(d.hourly.weather_code[idx]);
+    hg.insertAdjacentHTML('beforeend', `
+      <div class="cell">
+        <div class="when">${formatHour(t)}</div>
+        <div class="ico">${ww.icon}</div>
+        <div class="t">${Math.round(d.hourly.temperature_2m[idx])}°</div>
+      </div>
+    `);
+  }
+
+  // Daily (7 days)
+  const dg = document.getElementById('daily-grid');
+  dg.innerHTML = '';
+  for (let i = 0; i < 7 && i < d.daily.time.length; i++) {
+    const day = new Date(d.daily.time[i]);
+    const ww = wmo(d.daily.weather_code[i]);
+    dg.insertAdjacentHTML('beforeend', `
+      <div class="cell">
+        <div class="when">${i === 0 ? 'TODAY' : day.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</div>
+        <div class="ico">${ww.icon}</div>
+        <div class="t">${Math.round(d.daily.temperature_2m_max[i])}°</div>
+        <div class="lo">${Math.round(d.daily.temperature_2m_min[i])}°</div>
+      </div>
+    `);
+  }
+
+  // Almanac
+  const sr = new Date(today.sunrise[0]);
+  const ss = new Date(today.sunset[0]);
+  const daylight = (ss - sr) / 1000 / 60;
+  document.getElementById('a-sunrise').textContent = formatHour(sr);
+  document.getElementById('a-sunset').textContent = formatHour(ss);
+  document.getElementById('a-daylight').textContent = `${Math.floor(daylight / 60)}h ${Math.round(daylight % 60)}m`;
+  document.getElementById('a-high').textContent = `${Math.round(today.temperature_2m_max[0])}${tempU}`;
+  document.getElementById('a-low').textContent = `${Math.round(today.temperature_2m_min[0])}${tempU}`;
+  document.getElementById('a-precip').textContent = `${today.precipitation_sum[0]} ${precipU}`;
+  document.getElementById('a-uv').textContent = `${today.uv_index_max[0]?.toFixed(1) ?? '--'} (max today)`;
+  document.getElementById('a-vis').textContent = `${(cur.visibility / (cfg.units === 'imperial' ? 1609 : 1000)).toFixed(1)} ${cfg.units === 'imperial' ? 'mi' : 'km'}`;
+  document.getElementById('a-cloud').textContent = `${cur.cloud_cover}%`;
+}
+
+function degToCompass(deg) {
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(deg / 22.5) % 16];
+}
+
+function formatHour(d) {
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true }).replace(' ', '');
+}
+
+// ---------- Channel cycling ----------
+function startCycle() {
+  if (cycleTimer) clearInterval(cycleTimer);
+  const enabled = Object.entries(cfg.channels).filter(([_, on]) => on).map(([k]) => k);
+  if (!enabled.length) return;
+  activeChannelIdx = 0;
+  showChannel(enabled[0]);
+  cycleTimer = setInterval(() => {
+    activeChannelIdx = (activeChannelIdx + 1) % enabled.length;
+    showChannel(enabled[activeChannelIdx]);
+  }, cfg.cycle * 1000);
+}
+
+function showChannel(name) {
+  document.querySelectorAll('.channel').forEach(el => {
+    el.classList.toggle('active', el.dataset.name === name);
+  });
+}
+
+// ---------- Boot ----------
+async function boot() {
+  try {
+    document.getElementById('status').textContent = 'Locating…';
+    coords = await geocode(cfg.location);
+    document.getElementById('loc').textContent = coords.name.toUpperCase();
+    document.getElementById('status').textContent = 'Fetching weather…';
+    weatherData = await fetchWeather(coords.lat, coords.lon);
+    document.getElementById('status').style.display = 'none';
+    renderAll(weatherData);
+    startCycle();
+  } catch (e) {
+    document.getElementById('status').textContent = `Error: ${e.message}`;
+  }
+}
+
+// ---------- Music player ----------
+const audio = document.getElementById('audio');
+const ppBtn = document.getElementById('pp');
+const volSlider = document.getElementById('vol');
+const stationLabel = document.getElementById('p-station');
+const nowLabel = document.getElementById('p-now');
+const pickBtn = document.getElementById('pick');
+const ytFrame = document.getElementById('yt-frame');
+
+let ytPlayer = null;
+let ytReady = false;
+let currentStation = null;
+let playing = false;
+
+// Load YouTube IFrame API
+(function loadYT() {
+  const tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+})();
+
+window.onYouTubeIframeAPIReady = () => {
+  const div = document.createElement('div');
+  div.id = 'yt-player';
+  ytFrame.appendChild(div);
+  ytPlayer = new YT.Player('yt-player', {
+    height: '1', width: '1',
+    playerVars: { autoplay: 0, controls: 0, disablekb: 1 },
+    events: { onReady: () => { ytReady = true; ytPlayer.setVolume(cfg.volume); } },
+  });
+};
+
+function parseYtId(input) {
+  if (!input) return { videoId: '', listId: '' };
+  const s = input.trim();
+  if (!s.includes('/') && !s.includes('?')) {
+    return s.startsWith('PL') || s.startsWith('UU') || s.startsWith('OL') ? { listId: s } : { videoId: s };
+  }
+  try {
+    const u = new URL(s);
+    const list = u.searchParams.get('list');
+    const v = u.searchParams.get('v');
+    if (list) return { listId: list, videoId: v || '' };
+    if (v) return { videoId: v };
+    const last = u.pathname.split('/').filter(Boolean).pop();
+    return { videoId: last || '' };
+  } catch { return { videoId: s }; }
+}
+
+function setStation(stationId) {
+  const st = STATIONS.find(s => s.id === stationId);
+  if (!st) return;
+  currentStation = st;
+  cfg.station = stationId;
+  saveConfig();
+  stopPlayback();
+  stationLabel.textContent = st.name;
+  nowLabel.textContent = st.sub;
+  if (playing) startPlayback();
+}
+
+function stopPlayback() {
+  audio.pause();
+  audio.src = '';
+  if (ytReady && ytPlayer) ytPlayer.stopVideo();
+}
+
+function startPlayback() {
+  if (!currentStation) return;
+  if (currentStation.type === 'audio') {
+    audio.src = currentStation.url;
+    audio.volume = cfg.volume / 100;
+    audio.play().catch(e => { nowLabel.textContent = 'Stream blocked — try another'; });
+  } else if (currentStation.type === 'yt') {
+    if (!ytReady) { nowLabel.textContent = 'Loading YouTube…'; setTimeout(startPlayback, 600); return; }
+    let videoId = currentStation.videoId;
+    let listId = '';
+    if (currentStation.id === 'custom') {
+      const parsed = parseYtId(cfg.customYt);
+      videoId = parsed.videoId;
+      listId = parsed.listId;
+      if (!videoId && !listId) { nowLabel.textContent = 'Set a YouTube URL in Settings'; playing = false; ppBtn.textContent = '▶'; return; }
+    }
+    ytPlayer.setVolume(cfg.volume);
+    if (listId) {
+      ytPlayer.loadPlaylist({ list: listId, listType: 'playlist' });
+    } else {
+      ytPlayer.loadVideoById(videoId);
+    }
+  }
+}
+
+ppBtn.onclick = () => {
+  if (!currentStation) { openPicker(); return; }
+  playing = !playing;
+  ppBtn.textContent = playing ? '■' : '▶';
+  if (playing) startPlayback(); else stopPlayback();
+};
+
+volSlider.value = (loadConfig().volume ?? 60);
+volSlider.oninput = () => {
+  cfg.volume = parseInt(volSlider.value);
+  audio.volume = cfg.volume / 100;
+  if (ytReady && ytPlayer) ytPlayer.setVolume(cfg.volume);
+  saveConfig();
+};
+
+function openPicker() {
+  const existing = document.getElementById('station-menu');
+  if (existing) { existing.remove(); return; }
+  const menu = document.createElement('div');
+  menu.id = 'station-menu';
+  menu.style.cssText = `
+    position: fixed; bottom: 80px; left: 20px;
+    background: #111; border: 2px solid var(--fg); border-radius: 8px;
+    padding: 8px; z-index: 100; min-width: 240px;
+    font-family: system-ui, -apple-system, sans-serif;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  `;
+  STATIONS.forEach(s => {
+    const item = document.createElement('div');
+    item.style.cssText = 'padding: 8px 10px; cursor: pointer; color: #fff; border-radius: 4px;';
+    item.innerHTML = `<div style="color:var(--fg);font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;">${s.name}</div><div style="color:#888;font-size:11px;">${s.sub}</div>`;
+    item.onmouseenter = () => item.style.background = '#222';
+    item.onmouseleave = () => item.style.background = '';
+    item.onclick = () => {
+      setStation(s.id);
+      menu.remove();
+      if (!playing) ppBtn.click();
+    };
+    menu.appendChild(item);
+  });
+  document.body.appendChild(menu);
+  setTimeout(() => {
+    document.addEventListener('click', function close(e) {
+      if (!menu.contains(e.target) && e.target !== pickBtn) { menu.remove(); document.removeEventListener('click', close); }
+    });
+  }, 0);
+}
+pickBtn.onclick = openPicker;
+stationLabel.onclick = openPicker;
+
+// Restore station selection (don't autoplay — browsers block it)
+if (cfg.station) {
+  const st = STATIONS.find(s => s.id === cfg.station);
+  if (st) { currentStation = st; stationLabel.textContent = st.name; nowLabel.textContent = st.sub + ' · paused'; }
+}
+audio.volume = cfg.volume / 100;
+
+// ---------- Visualizer ----------
+const VIZ_BARS = 32;
+const vizEl = document.getElementById('viz');
+const vizBars = [];
+for (let i = 0; i < VIZ_BARS; i++) {
+  const b = document.createElement('div');
+  b.className = 'bar';
+  vizEl.appendChild(b);
+  vizBars.push(b);
+}
+
+let vizT = 0;
+function tickViz() {
+  vizT += 0.04;
+  for (let i = 0; i < VIZ_BARS; i++) {
+    let h;
+    if (!playing) {
+      h = 2;
+    } else {
+      // Procedural EQ: combine sin waves at bar-specific frequencies, weight low bars heavier (bass)
+      const center = VIZ_BARS / 2;
+      const distFromCenter = Math.abs(i - center) / center; // 0 center, 1 edge
+      const bassWeight = 1 - distFromCenter * 0.6;
+      const bass = Math.sin(vizT * 2.3 + i * 0.15) * 0.5 + 0.5;
+      const mid  = Math.sin(vizT * 4.1 + i * 0.7)  * 0.5 + 0.5;
+      const high = Math.sin(vizT * 7.2 + i * 1.3)  * 0.5 + 0.5;
+      const noise = Math.sin(vizT * 13 + i * 5.7) * 0.15;
+      const v = (bass * 0.5 + mid * 0.35 + high * 0.25) * bassWeight + noise;
+      h = Math.max(2, Math.min(32, v * 30));
+    }
+    vizBars[i].style.height = h + 'px';
+  }
+  requestAnimationFrame(tickViz);
+}
+tickViz();
+
+// ---------- Settings panel ----------
+const panel = document.getElementById('panel');
+document.getElementById('settings-btn').onclick = () => { openPanel(); };
+document.getElementById('close-panel').onclick = () => panel.classList.remove('open');
+
+function openPanel() {
+  document.getElementById('in-location').value = cfg.location;
+  document.getElementById('in-brand').value = cfg.brand;
+  document.getElementById('in-units').value = cfg.units;
+  document.getElementById('in-cycle').value = cfg.cycle;
+  document.getElementById('in-crawl').value = cfg.crawl;
+  document.getElementById('in-yt').value = cfg.customYt || '';
+
+  const toggles = document.getElementById('channel-toggles');
+  toggles.innerHTML = '';
+  for (const [name, on] of Object.entries(cfg.channels)) {
+    toggles.insertAdjacentHTML('beforeend', `
+      <div class="check">
+        <input type="checkbox" id="ch-${name}" ${on ? 'checked' : ''}>
+        <label for="ch-${name}" style="margin:0;text-transform:capitalize;color:#fff;letter-spacing:0;">${name}</label>
+      </div>
+    `);
+  }
+
+  const themesEl = document.getElementById('themes');
+  themesEl.innerHTML = '';
+  for (const [name, t] of Object.entries(THEMES)) {
+    const el = document.createElement('div');
+    el.className = 'swatch' + (cfg.theme === name ? ' active' : '');
+    el.style.background = `linear-gradient(135deg, ${t['--bg-1']}, ${t['--bg-2']})`;
+    el.title = name;
+    el.onclick = () => {
+      themesEl.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+      el.classList.add('active');
+      el.dataset.selected = 'true';
+      themesEl.dataset.selected = name;
+    };
+    themesEl.appendChild(el);
+  }
+  themesEl.dataset.selected = cfg.theme;
+
+  panel.classList.add('open');
+}
+
+document.getElementById('save').onclick = () => {
+  cfg.location = document.getElementById('in-location').value.trim() || DEFAULTS.location;
+  cfg.brand = document.getElementById('in-brand').value.trim() || DEFAULTS.brand;
+  cfg.units = document.getElementById('in-units').value;
+  cfg.cycle = Math.max(2, parseInt(document.getElementById('in-cycle').value) || DEFAULTS.cycle);
+  cfg.crawl = document.getElementById('in-crawl').value || DEFAULTS.crawl;
+  cfg.customYt = document.getElementById('in-yt').value.trim();
+  for (const name of Object.keys(cfg.channels)) {
+    cfg.channels[name] = document.getElementById('ch-' + name).checked;
+  }
+  cfg.theme = document.getElementById('themes').dataset.selected || 'classic';
+  saveConfig();
+  applyConfig();
+  panel.classList.remove('open');
+  document.getElementById('status').style.display = '';
+  boot();
+};
+
+boot();
+</script>
+</body>
+</html>
